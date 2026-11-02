@@ -1,7 +1,7 @@
 <template>
   <div id="tab-settings" class="tab-content" :class="{ active: activeTab === 'settings' }">
     <div class="settings-grid">
-      <div class="settings-section" v-if="currentOrigin === selectedApiBase">
+      <div class="settings-section" v-if="canEditSiteSettings">
         <div class="section-title"><span>▸</span> {{ trans.appearance }} 1</div>
 
         <div class="form-row">
@@ -34,9 +34,7 @@
             <label class="form-label">{{ trans.defaultLanguage }}</label>
             <select v-model="settings.default_language" class="form-select">
               <option value="auto">{{ trans.languageAuto }}</option>
-              <option value="zh">{{ trans.languageChinese }}</option>
-              <option value="en">{{ trans.languageEnglish }}</option>
-              <option value="es">{{ trans.languageSpanish }}</option>
+              <option v-for="language in languages" :key="language.code" :value="language.code">{{ language.nativeLabel }}</option>
             </select>
           </div>
         </div>
@@ -109,7 +107,7 @@
         </div>
       </div>
 
-      <div class="settings-section" v-if="currentOrigin === selectedApiBase">
+      <div class="settings-section" v-if="canEditSiteSettings">
         <div class="section-title"><span>▸</span> {{ trans.appearance }} 2</div>
 
         <div class="form-row">
@@ -174,6 +172,14 @@
           <div class="form-group flex-1 checkbox-item">
             <input type="checkbox" id="cfg_show_three_net_details" v-model="settings.show_three_net_details">
             <label>{{ trans.showThreeNetDetails }}</label>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1 checkbox-item">
+            <input type="checkbox" id="cfg_auto_discovery" v-model="settings.auto_discovery">
+            <label><b>{{ trans.autoDiscovery }}</b></label>
+            <HelpTooltip :text="trans.autoDiscoveryTip" />
           </div>
         </div>
 
@@ -458,9 +464,7 @@
               <HelpTooltip :text="trans.notificationLanguageTip" />
             </label>
             <select v-model="settings.notification_language" class="form-select">
-              <option value="zh">{{ trans.languageChinese }}</option>
-              <option value="en">{{ trans.languageEnglish }}</option>
-              <option value="es">{{ trans.languageSpanish }}</option>
+              <option v-for="language in notificationLanguages" :key="language.code" :value="language.code">{{ language.nativeLabel }}</option>
             </select>
           </div>
 
@@ -632,16 +636,44 @@
           </div>
         </div>
 
-        <div class="form-group mt-4">
-          <label class="form-label">
-            {{ trans.jwtSecret }}
-            <HelpTooltip :text="trans.jwtSecretTip" />
-          </label>
-          <div class="password-input-wrapper">
-            <input type="text" name="jwt_secret" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" v-model="settings.jwt_secret" :class="['form-input', { 'secret-input-masked': !passwordVisible.jwtSecret }]" placeholder="••••••••••••••••••••••••••••••••">
-            <button type="button" class="password-toggle" @click="$emit('toggle-password', 'jwtSecret')">
-              {{ passwordVisible.jwtSecret ? '🙈' : '👁️' }}
-            </button>
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label class="form-label">
+              {{ trans.jwtSecret }}
+              <HelpTooltip :text="trans.jwtSecretTip" />
+            </label>
+            <div class="password-input-wrapper">
+              <input type="text" name="jwt_secret" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" v-model="settings.jwt_secret" :class="['form-input', { 'secret-input-masked': !passwordVisible.jwtSecret }]" placeholder="••••••••••••••••••••••••••••••••">
+              <button type="button" class="password-toggle" @click="$emit('toggle-password', 'jwtSecret')">
+                {{ passwordVisible.jwtSecret ? '🙈' : '👁️' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group flex-1">
+            <label class="form-label">
+              {{ trans.customUserAgent }}
+              <HelpTooltip :text="trans.customUserAgentTip" />
+            </label>
+            <div class="password-input-wrapper">
+              <input
+                v-model.trim="settings.ua"
+                type="text"
+                name="ua"
+                autocomplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+                data-form-type="other"
+                maxlength="100"
+                :class="['form-input', { 'secret-input-masked': !passwordVisible.ua, 'input-invalid': userAgentInvalid }]"
+                :placeholder="trans.customUserAgentPlaceholder"
+              >
+              <button type="button" class="password-toggle" @click="$emit('toggle-password', 'ua')">
+                {{ passwordVisible.ua ? '🙈' : '👁️' }}
+              </button>
+            </div>
+            <p v-if="userAgentInvalid" class="text-red text-sm mt-1">{{ trans.customUserAgentInvalid }}</p>
           </div>
         </div>
 
@@ -794,8 +826,9 @@
       </div>
     </div>
 
-    <div class="text-right mt-5">
-      <button @click="$emit('save-settings')" class="btn btn-primary btn-lg" :disabled="saving || hasPingNodeErrors">{{ saving ? '⏳' : '💾' }} {{ saving ? trans.saving : trans.saveConfig }}</button>
+    <div class="settings-save-bar">
+      <span class="settings-save-hint">{{ trans.saveHint }}</span>
+      <button @click="$emit('save-settings')" class="btn btn-primary btn-lg" :disabled="saving || hasPingNodeErrors || userAgentInvalid">{{ saving ? '⏳' : '💾' }} {{ saving ? trans.saving : trans.saveConfig }}</button>
     </div>
   </div>
 </template>
@@ -805,6 +838,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import HelpTooltip from '../../../components/HelpTooltip.vue'
 import { FRONTEND_WS_TIMEOUT_MINUTES_MAX, HISTORY } from '../../../utils/constants.js'
 import { PING_NODE_FIELDS, validatePingNode } from '../../../utils/pingNode.js'
+import { LANGUAGES, LANGUAGE_MAP } from '../../../locales'
+import { NOTIFICATION_LANGUAGE_CODES } from '../../../../shared/languages.js'
+
+const languages = LANGUAGES
+
+// 通知语言只支持后端已有文案的语种；选项固定显示各语言原生名称，不随界面语言翻译。
+const notificationLanguages = NOTIFICATION_LANGUAGE_CODES
+  .map((code) => LANGUAGE_MAP[code])
+  .filter(Boolean)
 
 const props = defineProps({
   trans: { type: Object, required: true },
@@ -826,6 +868,29 @@ const emit = defineEmits([
   'send-test-notification', 'query-d1-usage',
   'alert-message'
 ])
+
+const isLocalHostname = (value) => {
+  try {
+    const raw = String(value || '').trim()
+    if (!raw) return false
+    const hostname = new URL(raw.includes('://') ? raw : `http://${raw}`).hostname.toLowerCase()
+    return hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '::1' ||
+      hostname === '[::1]'
+  } catch (_) {
+    return false
+  }
+}
+
+// 站点级设置只允许在当前 API 对应的站点编辑；本地开发时也放行，便于连远端 API 调试。
+const canEditSiteSettings = computed(() =>
+  props.currentOrigin === props.selectedApiBase ||
+  isLocalHostname(props.currentOrigin) ||
+  isLocalHostname(props.selectedApiBase)
+)
 
 const commonNotificationTimezones = [
   'UTC',
@@ -1366,6 +1431,14 @@ const pingNodeErrors = computed(() => Object.fromEntries(
 ))
 
 const hasPingNodeErrors = computed(() => Object.values(pingNodeErrors.value).some(Boolean))
+
+// 与服务端 settings.js / agent config.go 保持一致：只允许在请求头、config.conf、
+// 安装命令引号下都安全的字符；留空由服务端回退默认 cfsm。
+const USER_AGENT_ALLOWED_RE = /^[A-Za-z0-9 _.\-/,:;()+=@#*?~]*$/
+const userAgentInvalid = computed(() => {
+  const value = String(props.settings.ua ?? '').trim()
+  return value.length > 100 || !USER_AGENT_ALLOWED_RE.test(value)
+})
 
 const validatePingNodes = () => !hasPingNodeErrors.value
 

@@ -235,6 +235,7 @@ CORS_ALLOWED_ORIGINS=https://status.example.com,https://admin.example.com
 - Headers：
   ```
   Content-Type: application/json
+  User-Agent: <自定义 UA，默认 cfsm>
   X-Agent-Version: <探针版本号>
   X-Agent-Config-Schema: 5
   X-Agent-Config-Md5: <最后成功应用的配置 MD5，首次为 none>
@@ -401,6 +402,21 @@ CORS_ALLOWED_ORIGINS=https://status.example.com,https://admin.example.com
   （`Content-Type: application/x-www-form-urlencoded; charset=utf-8`）
 - ~~动态配置包含 `traffic_calc_type`、`traffic_limit`、`auto_update` 等全部探针运行参数。~~ **2026-07-26 修订，2026-07-31 更新，2026-08-15 更新，2026-08-18 更新，2026-08-19 更新，2026-08-28 更新**：schema `3` 不包含 `connection_mode`；schema `4` 增加 `connection_mode`，并保持原有序列化与 MD5 计算不变；schema `5` 在 WSS 全局开启且服务器 `connection_mode=auto` 时追加 `wss_report_interval`（`1-5` 秒，默认 `2`），并将 `collect_interval=0` 或大于 WSS 间隔的值规范为 WSS 间隔；schema `6` 追加 `ping_mode`（`tcp|icmp`，默认 `tcp`），参与配置 MD5 并下发给 Agent。待应用的 `rx_correction`、`tx_correction` 会追加到响应体，但不参与配置 MD5；启用自动更新且版本不一致时追加 `update=1`。
 - 探针应用流量修正后，可在下一次 `POST /update` 顶层回传 `rx_correction` / `tx_correction`。值匹配时后端清空待修正字段并直接返回纯文本 `OK`，本次请求不要求 `metrics`。
+- **自动发现（2026-10-21 新增）**：`site_options.auto_discovery === 'true'` 时，若请求体 `id` 为空，服务端会在本次请求内创建服务器并继续正常入库：
+  - 名称优先级：请求体 `name`（≤100 字符）→ 请求头 `CF-Connecting-IP`；都取不到时放弃创建。`CF-Connecting-IP` 为 `"0"`、`"0.0.0.0"` 等占位值时视为无效。`metrics.ip_v4` / `metrics.ip_v6` 不参与命名。
+  - 去重：已存在同名服务器时不新建，也不写入本次上报（直接返回 404），响应头标记 `reused` 且不回传 `X-CFSM-Server-Id`；Agent 收到 `reused` 后应输出提示并退出，避免把本机数据写进同名服务器。
+  - 新建的 `id` 通过响应头 `X-CFSM-Server-Id` 回传，Agent 需落盘并在后续请求中使用。
+  - 结果标记通过响应头 `X-CFSM-Auto-Discovery` 回传：`created`、`reused`、`failed:<code>`（`no_name` / `db_error`）。
+  - 创建失败只写服务端日志，返回下方原有 404，不重试、不发送通知；Agent 收到 `failed` 后会在本次运行内停止自动发现与上报（空 `id` 的上报必然是 404），重启 Agent 服务后才会重新尝试一次。
+  - 建号前先校验本次上报能否入库（`samples`/`metrics` 为空、`rx_correction`/`tx_correction` 非法时直接返回 400），校验不通过不会建号，避免留下永远不会被写入的空壳服务器。
+  - 该分支只在 `id` 为空时生效；`id` 非空但查不到仍返回 404，已删除的服务器不会被自动重建。
+  - 未开启自动发现时，空 `id` 的上报仍是原有 404，且不带任何自动发现响应头；Agent 应据此提示用户开启自动发现或改用 `-id` 安装后退出，不要静默重试。
+  - `wss://.../update` 不参与自动发现：未绑定的 Agent 必须先通过 POST 建号，再按下发的 `connection_mode` 切换。
+- **自定义 UA（2026-10-27 新增）**：站点设置 `ua`（默认 `cfsm`，仅允许字母、数字、空格与 `. _ - / , : ; ( ) + = @ # * ? ~`，长度 ≤100）通过**独立通道**下发，不参与配置 MD5，也不会出现在配置 body 中：
+  - `POST /update`：`secret` 校验通过后，**走配置协商分支**的 `200` / `204` 响应头携带 `X-Ua: <当前站点 UA>`。以下 2xx 不携带（它们不加载站点设置）：流量校正确认的 `200 OK`、请求 schema 超出服务端支持范围时直接返回的 `200 OK`。`401` / `400` / `404` / `413` 同样不携带，避免向未认证请求暴露。
+  - `wss://.../update`：认证通过后，**本次 ack 携带配置协商字段**（`config_schema` / `config_md5`）时，顶层才有 `ua` 字段；普通 ack 不带。握手 `101` 与调度 `409` 响应不携带。
+  - Agent 收到后与本地上报 UA 比对，不同才写入配置文件的 `UA` 键；相同则忽略，避免每个上报周期重复写盘。
+  - 该值同时用于 `/update` 的 WAF 放行规则：修改站点 `ua` 时必须先在防火墙同时放行新旧两个值，再更新设置，否则 Agent 切换 UA 后会立即被拦截。
 - 失败：
   ```json
   { "error": "Invalid secret", "code": 401 }
@@ -419,6 +435,7 @@ CORS_ALLOWED_ORIGINS=https://status.example.com,https://admin.example.com
   { "type": "ack", "ts": 1737638343000, "persisted": true, "nextD1WriteAfterMs": 60000, "nextWssReportAfterMs": 60000 }
   ```
   `persisted` 表示本条消息是否触发 D1 历史写入；`nextD1WriteAfterMs` 是距离下一次允许写入 D1 的最短等待时间。WSS 首条成功指标会立即写入一次 D1，后续按该服务器 `report_interval` 控制写入频率（允许值沿用配置：`30/60/120/180` 秒；异常回退 `60` 秒）。`nextWssReportAfterMs` 是服务端建议的下一次 WSS 上报间隔：有前端实时订阅时使用服务器 `wss_report_interval`；无前端访问时使用 `report_interval`，但最低为 `60` 秒，不区分资源告警缓存是否活跃。缺失或非法的 WSS 间隔回退为 `2` 秒。
+  注意 `ua` 只随配置协商帧出现（Agent 首次上报、md5 变化或每 60 秒一次），不是每条 ack 都带。
   新版 WSS Agent 可在握手 URL query 中携带 `config_schema=6` / `config_md5=<md5>`，也兼容握手 Header `X-Agent-Config-Schema: 6` 与 `X-Agent-Config-Md5` 记录当前配置状态；当某次上报消息携带 `config_schema: 6` / `config_md5` 时，ack 会同时返回动态配置协商字段。schema `3` / `4` / `5` Agent 仍会收到各自版本的兼容配置：
   ```json
   {
@@ -427,6 +444,7 @@ CORS_ALLOWED_ORIGINS=https://status.example.com,https://admin.example.com
     "persisted": false,
     "nextD1WriteAfterMs": 30000,
     "nextWssReportAfterMs": 2000,
+    "ua": "cfsm",
     "config_schema": 6,
     "config_md5": "b4d7c0d...",
     "has_config": true,
@@ -1187,8 +1205,10 @@ Header：`X-Turnstile-Token: <token>`（当 `site_options.turnstile_enabled` 或
 **Request**
 
 ```json
-{ "action": "list" }
+{ "action": "list", "refresh": false }
 ```
+
+- `refresh`（可选，默认 `false`）：为 `true` 时先清空本 isolate 的服务器列表/详情缓存再查询 D1，用于管理后台「刷新缓存」按钮，保证返回的是最新数据。
 
 **Response 200**
 
@@ -1352,7 +1372,7 @@ Header：`X-Turnstile-Token: <token>`（当 `site_options.turnstile_enabled` 或
 **字段分类**：
 
 - `APPEARANCE_FIELDS`（写入 `appearance_options` JSON）：`site_title`、`custom_bg`、`custom_bg_mobile`、`favicon`、`custom_head`、`custom_script`、`csp_static`、`csp_api`、`display_mode`、`preferred_theme`、`default_language`、`theme_options`
-- `SITE_FIELDS`（写入 `site_options` JSON）：`is_public`、`show_price`、`show_expire`、`show_tf`、`wss_report_enabled`、`wss_report_hours`、`frontend_ws_timeout_minutes`、`long_history_points`、通知、Turnstile、账号、Cloudflare、Ping 节点及其显示名称（`custom_ct_name`、`custom_cu_name`、`custom_cm_name`、`custom_bd_name`）、`expire_reminder`、`notification_timezone`、`expire_notification_time`、`theme_url`、历史优化字段等站点级配置。`wss_report_hours` 是允许 Agent WSS 上报的 UTC 小时数组（`0-23`）；缺失时默认全天，空数组表示所有时段均关闭
+- `SITE_FIELDS`（写入 `site_options` JSON）：`auto_discovery`（站点级自动发现开关，`'true'|'false'`，默认 `'false'`，详见 [§1.1](#11-post-update---指标上报agent-入口)）、`is_public`、`show_price`、`show_expire`、`show_tf`、`wss_report_enabled`、`wss_report_hours`、`frontend_ws_timeout_minutes`、`long_history_points`、通知、Turnstile、账号、Cloudflare、Ping 节点及其显示名称（`custom_ct_name`、`custom_cu_name`、`custom_cm_name`、`custom_bd_name`）、`expire_reminder`、`notification_timezone`、`expire_notification_time`、`theme_url`、历史优化字段等站点级配置。`wss_report_hours` 是允许 Agent WSS 上报的 UTC 小时数组（`0-23`）；缺失时默认全天，空数组表示所有时段均关闭
 - 任何未列出的字段会被忽略
 
 **特殊处理**：
@@ -1656,7 +1676,7 @@ UUID 缺失或格式非法时返回 `400 { "error": "invalidServerId", "code": 4
 
 ### 3.13 `action: export_servers` - 导出服务器
 
-导出 `servers` 表全部配置，按 `sort_order` 升序排列；不包含历史指标。
+导出 `servers` 全表（按 `sort_order` 升序）与站点/外观设置，不含历史指标。`settings` 是合并默认值后的生效值，源站未配置过的字段也会带默认值过去。
 
 **Request**
 
@@ -1672,9 +1692,26 @@ UUID 缺失或格式非法时返回 `400 { "error": "invalidServerId", "code": 4
   "servers": [
     { "id": "9b2c4d3e-1a2b-4c5d-9e8f-7a6b5c4d3e2f", "name": "HK-01", "sort_order": 0 }
   ],
+  "settings": {
+    "site": { "is_public": "true", "show_price": "true" },
+    "appearance": { "site_title": "CF Server Monitor", "display_mode": "ring" }
+  },
   "message": "serversExported"
 }
 ```
+
+**不导出的字段**（与部署绑定，覆盖会导致无法登录、探针失联或告警错位）：
+
+| 字段 | 原因 |
+| --- | --- |
+| `username` `password` `jwt_secret` | 凭据失效，当前会话被强制退出 |
+| `turnstile_*`（4 项） | 站点密钥绑定域名白名单 |
+| `ua` | 与域名防护规则配套，覆盖后上报全部失败 |
+| `resource_alert_rules` | 规则内是服务器 ID |
+| `csp_static` `csp_api` | CSP 白名单按域名配置 |
+| `servers_optimized` | 分区迁移标记，覆盖会重排 `history_partition_id` |
+
+> `cloudflare_account_id` / `cloudflare_token` 会导出（同账号迁移需要），备份文件因此含明文 API 令牌。
 
 **失败返回**：`400 serversExportFailed`。
 
@@ -1689,16 +1726,23 @@ UUID 缺失或格式非法时返回 `400 { "error": "invalidServerId", "code": 4
   "action": "import_servers",
   "servers": [
     { "id": "9b2c4d3e-1a2b-4c5d-9e8f-7a6b5c4d3e2f", "name": "HK-01", "server_group": "HK" }
-  ]
+  ],
+  "settings": {
+    "site": { "is_public": "true" },
+    "appearance": { "site_title": "CF Server Monitor" }
+  }
 }
 ```
 
+`servers` 与 `settings` 均可省略，但不能同时为空，否则返回 `400 noServersToImport`。
+
 **行为说明**：
 
-- `servers` 不是非空数组时返回 `400 noServersToImport`
-- UUID 非法或与现有服务器重复的记录会被跳过
-- `history_partition_id` 非法、重复或超出允许范围时会重新分配；无可用分区时跳过该记录
-- 仅导入服务器配置，不导入 `metrics_history`；单行插入失败也会跳过，并继续处理后续记录
+- `servers`：UUID 非法、重复或非对象记录跳过；`history_partition_id` 冲突时重新分配，无可用分区跳过；不导入 `metrics_history`；单条失败跳过并继续
+- `settings`：只写白名单字段，其余字段记入 `settings.ignoredFields`
+- `settings` 按字段覆盖，复用 `saveSiteOptions` / `saveAppearanceOptions` 的归一化，不重复 `save_settings` 的 Turnstile / 通知 / UA 前置校验
+- 只导入 `settings` 时不访问 `servers` 表
+- `wss_report_enabled` / `wss_report_hours` 变更后下发上报模式变更
 
 **Response 200**
 
@@ -1708,11 +1752,17 @@ UUID 缺失或格式非法时返回 `400 { "error": "invalidServerId", "code": 4
   "imported": 2,
   "skipped": 1,
   "skippedIds": ["<duplicate-or-invalid-id>"],
+  "settings": {
+    "imported": true,
+    "site": 12,
+    "appearance": 8,
+    "ignoredFields": ["password", "ua"]
+  },
   "message": "serversImported"
 }
 ```
 
-全部记录均跳过时仍返回 `200`，`message` 为 `noServersImported`。
+全部记录均跳过且未写入设置时仍返回 `200`，`message` 为 `noServersImported`；只导入了设置时 `message` 为 `settingsImported`。
 
 ***
 
@@ -1891,6 +1941,7 @@ UUID 缺失或格式非法时返回 `400 { "error": "invalidServerId", "code": 4
   default_language: 'auto' | 'zh' | 'en',
   theme_options: Record<string, unknown>,
   theme_url: string,             // 第三方主题商店 URL；为空使用内置主题
+  auto_discovery: 'true' | 'false', // 默认 'false'；开启后空 id 的 POST /update 会自动建号
   is_public: 'true' | 'false',
   show_price: 'true' | 'false',
   show_expire: 'true' | 'false',
@@ -2186,4 +2237,4 @@ curl -X POST https://status.example.com/admin/api \
 
 ***
 
-> 文档同步：与源码 `src/index.js`、`src/middleware/auth.js`、`src/handlers/{admin,dashboard,frontend,theme,update}.js`、`src/durable/MetricsBroadcaster.js`、`src/utils/{settings,errors,cors,csp,cache,metrics,common,serverBilling,version,latestReportCache,agentConfig}.js`、`src/database/{schema,updateDatabase}.js` 一一对应；后续修改任一文件时，请同步更新本文件。
+> 文档同步：与源码 `src/index.js`、`src/middleware/auth.js`、`src/handlers/{admin,dashboard,frontend,theme,update}.js`、`src/durable/MetricsBroadcaster.js`、`src/utils/{settings,errors,cors,csp,cache,metrics,common,serverBilling,version,latestReportCache,agentConfig,autoDiscovery}.js`、`src/database/{schema,updateDatabase}.js` 一一对应；后续修改任一文件时，请同步更新本文件。

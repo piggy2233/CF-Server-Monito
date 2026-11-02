@@ -16,7 +16,7 @@ import {
   DASHBOARD_LATENCY_WINDOW_CACHE_TTL_MS,
   DASHBOARD_LATENCY_WINDOW_HOURS,
   DASHBOARD_LATENCY_WINDOW_POINTS,
-  DASHBOARD_LATENCY_WINDOW_QUERY_CONCURRENCY
+  DASHBOARD_LATENCY_WINDOW_BATCH_SIZE
 } from '../utils/config.js';
 
 let dbInitialized = false;
@@ -444,62 +444,105 @@ export async function getDashboardLatencyHistory(db, servers, options = {}) {
     `SELECT name FROM sqlite_master WHERE type='table' AND name='metrics_history_old'`
   ).first();
 
-  const fetchServerLatency = async server => {
+  const queryStart = cutoff;
+  const intervalMs = Math.max(10_000, Math.ceil((queryEnd - queryStart) / points));
+  const firstRangeEnd = Math.min(queryEnd, queryStart + intervalMs);
+  const items = [];
+
+  // 窗口由 now/points 决定，与服务器无关：无效窗口直接给所有服务器返回空数据
+  if (queryStart >= queryEnd) {
+    for (const server of serversToFetch) {
+      const serverId = String(server?.id || '').trim();
+      if (serverId) result.set(serverId, { ping: [], loss: [] });
+    }
+    return result;
+  }
+
+  // 结果落盘只有这两个出口：窗口 + 缓存，避免同样的样板散落在四条路径上
+  const applyWindow = (serverId, rows) => {
+    const window = normalizeDashboardLatencyWindow(rows, { queryStart, intervalMs, points });
+    result.set(serverId, window);
+    if (useCache) {
+      dashboardLatencyHistoryCache.set(serverId, { cachedAt: now, window });
+    }
+  };
+  const applyEmpty = serverId => {
+    const empty = { ping: [], loss: [] };
+    result.set(serverId, empty);
+    if (useCache) {
+      dashboardLatencyHistoryCache.set(serverId, { cachedAt: now, window: empty });
+    }
+  };
+
+  for (const server of serversToFetch) {
     const serverId = String(server?.id || '').trim();
-    if (!serverId) return;
+    if (!serverId) continue;
 
     try {
       const historyInfo = await getServerHistoryInfo(db, serverId, server);
       if (!historyInfo.partitionId) {
         result.set(serverId, { ping: [], loss: [] });
-        return;
+        continue;
       }
 
-      const queryStart = cutoff;
-      if (queryStart >= queryEnd) {
-        result.set(serverId, { ping: [], loss: [] });
-        return;
-      }
-
-      const intervalMs = Math.max(10_000, Math.ceil((queryEnd - queryStart) / points));
       const idPrefix = getHistoryIdRange(historyInfo.partitionId).startId;
-      const querySparseHistory = async queryColumns => {
-        const sparseQuery = buildSparseHistoryQuery({
-          columns: queryColumns,
-          queryStart,
-          queryEnd,
-          firstRangeEnd: Math.min(queryEnd, queryStart + intervalMs),
-          intervalMs,
-          idPrefix,
-          oldTableExists,
-          tableBoundary: thisSunday.getTime(),
-          sampleOrder: 'DESC'
-        });
-        return db.prepare(sparseQuery.sql).bind(...sparseQuery.bindValues).all();
-      };
-
-      const rawResult = await querySparseHistory(columns);
-      const window = normalizeDashboardLatencyWindow(rawResult.results, { queryStart, intervalMs, points });
-      result.set(serverId, window);
-      if (useCache) {
-        dashboardLatencyHistoryCache.set(serverId, { cachedAt: now, window });
-      }
+      const sparseQuery = buildSparseHistoryQuery({
+        columns,
+        queryStart,
+        queryEnd,
+        firstRangeEnd,
+        intervalMs,
+        idPrefix,
+        oldTableExists,
+        tableBoundary: thisSunday.getTime(),
+        sampleOrder: 'DESC'
+      });
+      items.push({ serverId, sparseQuery });
     } catch (e) {
       debug('[DashboardLatency] query failed:', serverId, e?.message || e);
-      const empty = { ping: [], loss: [] };
-      result.set(serverId, empty);
-      if (useCache) {
-        dashboardLatencyHistoryCache.set(serverId, { cachedAt: now, window: empty });
+      applyEmpty(serverId);
+    }
+  }
+
+  for (let offset = 0; offset < items.length; offset += DASHBOARD_LATENCY_WINDOW_BATCH_SIZE) {
+    const chunk = items.slice(offset, offset + DASHBOARD_LATENCY_WINDOW_BATCH_SIZE);
+    let batchResults;
+    try {
+      batchResults = await db.batch(chunk.map(item =>
+        db.prepare(item.sparseQuery.sql).bind(...item.sparseQuery.bindValues)
+      ));
+      if (!Array.isArray(batchResults)) {
+        throw new TypeError('db.batch() returned a non-array result');
+      }
+    } catch (batchError) {
+      debug('[DashboardLatency] batch query failed, falling back to per-server query:', batchError?.message || batchError);
+      await Promise.all(chunk.map(async item => {
+        try {
+          const rawResult = await db.prepare(item.sparseQuery.sql).bind(...item.sparseQuery.bindValues).all();
+          applyWindow(item.serverId, rawResult.results);
+        } catch (e) {
+          debug('[DashboardLatency] query failed:', item.serverId, e?.message || e);
+          applyEmpty(item.serverId);
+        }
+      }));
+      continue;
+    }
+
+    for (let index = 0; index < chunk.length; index++) {
+      const { serverId } = chunk[index];
+      // 单台后处理异常只降级这一台，不能穿透到 /api/servers 让整页失败
+      try {
+        const rows = batchResults[index]?.results;
+        if (!Array.isArray(rows)) {
+          applyEmpty(serverId);
+          continue;
+        }
+        applyWindow(serverId, rows);
+      } catch (e) {
+        debug('[DashboardLatency] apply batch result failed:', serverId, e?.message || e);
+        applyEmpty(serverId);
       }
     }
-  };
-
-  for (let offset = 0; offset < serversToFetch.length; offset += DASHBOARD_LATENCY_WINDOW_QUERY_CONCURRENCY) {
-    await Promise.all(
-      serversToFetch
-        .slice(offset, offset + DASHBOARD_LATENCY_WINDOW_QUERY_CONCURRENCY)
-        .map(fetchServerLatency)
-    );
   }
 
   return result;
@@ -745,9 +788,16 @@ export async function getLatestMetricsForAllServers(db) {
 }
 
 // 从"完整指标"缓存中抽取每台服务器的最新上报时间戳（完整行是轻量结果的超集）
-function extractTimestampsFromMetricsCache(cache) {
+function extractTimestampsFromMetricsCache(cache, servers = null) {
   const map = new Map();
   if (!cache) return map;
+  if (servers) {
+    for (const server of servers) {
+      const metrics = cache.get(server.id);
+      if (metrics) map.set(server.id, metrics.timestamp);
+    }
+    return map;
+  }
   for (const [id, metrics] of cache) {
     if (metrics) map.set(id, metrics.timestamp);
   }
@@ -760,24 +810,25 @@ function extractTimestampsFromMetricsCache(cache) {
  * 命中"完整指标"缓存时直接复用；未命中才轻量查询，且不写回共享缓存，避免用残缺行污染它。
  * 每台服务器用 rowid 范围在主键索引上定位最新一行，每批最多 LATEST_QUERY_CHUNK_SIZE 台，
  * 通过 db.batch() 合并成一次 D1 往返（注意：D1 的 compound SELECT 项数上限极低，不能用 UNION ALL）。
+ * 可传入已筛选的 servers，复用调用方列表并只读取这些节点（包括缓存回退）。
  *
  * @returns {Promise<Map|null>} 成功返回 Map<serverId, timestamp>（可能为空 Map）；
  *   查询失败且无可回退缓存时返回 null，调用方应跳过本次检测，避免误判为全部离线。
  */
-export async function getLatestTimestampsForAllServers(db) {
+export async function getLatestTimestampsForAllServers(db, { servers = null } = {}) {
   const now = Date.now();
   const cacheInfo = getLatestMetricsCache();
   if (cacheInfo.cache && now - cacheInfo.time < cacheInfo.ttl) {
-    return extractTimestampsFromMetricsCache(cacheInfo.cache);
+    return extractTimestampsFromMetricsCache(cacheInfo.cache, servers);
   }
 
   const collected = new Map();
   try {
-    const servers = await getAllServers(db);
-    if (servers.length === 0) return collected;
+    const targetServers = servers ?? await getAllServers(db);
+    if (targetServers.length === 0) return collected;
 
     const items = [];
-    for (const server of servers) {
+    for (const server of targetServers) {
       try {
         // 传入 server 对象时 getServerHistoryInfo 不会触发额外查询
         const historyInfo = await getServerHistoryInfo(db, server.id, server);
@@ -810,6 +861,6 @@ export async function getLatestTimestampsForAllServers(db) {
     console.error('获取所有服务器最新时间戳失败:', e);
     // 查询失败时回退到（可能已过期的）完整缓存；无缓存则返回 null 让调用方跳过本次检测，
     // 避免把查询失败误判为全部服务器离线而误发告警
-    return cacheInfo.cache ? extractTimestampsFromMetricsCache(cacheInfo.cache) : null;
+    return cacheInfo.cache ? extractTimestampsFromMetricsCache(cacheInfo.cache, servers) : null;
   }
 }

@@ -4,11 +4,46 @@ import {
   SITE_SETTINGS_CACHE_TTL_MS
 } from './config.js';
 import { normalizePct } from './traffic.js';
+import {
+  AUTO_LANGUAGE,
+  DEFAULT_NOTIFICATION_LANGUAGE,
+  normalizeLanguagePreference,
+  normalizeNotificationLanguagePreference
+} from '../shared/languages.js';
 
 export const APPEARANCE_FIELDS = ['site_title', 'custom_bg', 'custom_bg_mobile', 'favicon', 'custom_head', 'custom_script', 'csp_static', 'csp_api', 'display_mode', 'preferred_theme', 'default_language', 'theme_options'];
 
-export const SITE_FIELDS = ['is_public', 'show_price', 'show_expire', 'show_tf', 'show_three_net_details', 'wss_report_enabled', 'wss_report_hours', 'frontend_ws_timeout_minutes', 'long_history_points', 'tg_notify', 'tg_bot_token', 'tg_chat_id', 'notification_timezone', 'notification_language', 'expire_notification_time', 'notification_webhook_enabled', 'notification_webhook_url', 'notification_webhook_method', 'notification_webhook_format', 'notification_webhook_headers', 'notification_webhook_body', 'notification_template', 'turnstile_enabled', 'turnstile_login_enabled', 'turnstile_site_key', 'turnstile_secret_key', 'jwt_secret', 'username', 'password', 'cloudflare_account_id', 'cloudflare_token', 'custom_ct', 'custom_cu', 'custom_cm', 'custom_bd', 'node_1', 'node_2', 'node_3', 'node_4', 'custom_ct_name', 'custom_cu_name', 'custom_cm_name', 'custom_bd_name', 'node_1_name', 'node_2_name', 'node_3_name', 'node_4_name', 'expire_reminder', 'resource_alert_rules', 'traffic_alert_threshold', 'theme_url', 'servers_optimized'];
+export const SITE_FIELDS = ['auto_discovery', 'is_public', 'show_price', 'show_expire', 'show_tf', 'show_three_net_details', 'wss_report_enabled', 'wss_report_hours', 'frontend_ws_timeout_minutes', 'long_history_points', 'tg_notify', 'tg_bot_token', 'tg_chat_id', 'notification_timezone', 'notification_language', 'expire_notification_time', 'notification_webhook_enabled', 'notification_webhook_url', 'notification_webhook_method', 'notification_webhook_format', 'notification_webhook_headers', 'notification_webhook_body', 'notification_template', 'turnstile_enabled', 'turnstile_login_enabled', 'turnstile_site_key', 'turnstile_secret_key', 'jwt_secret', 'username', 'password', 'cloudflare_account_id', 'cloudflare_token', 'custom_ct', 'custom_cu', 'custom_cm', 'custom_bd', 'node_1', 'node_2', 'node_3', 'node_4', 'custom_ct_name', 'custom_cu_name', 'custom_cm_name', 'custom_bd_name', 'node_1_name', 'node_2_name', 'node_3_name', 'node_4_name', 'expire_reminder', 'resource_alert_rules', 'traffic_alert_threshold', 'theme_url', 'servers_optimized', 'ua'];
 
+// 导出/导入服务器时一并迁移站点与外观设置。以下字段与当前部署的环境强绑定，
+// 直接覆盖会让目标站点无法登录、探针失联或告警错位，因此既不导出也不导入：
+// - username/password/jwt_secret：覆盖后旧凭据失效，当前登录会被强制退出
+// - turnstile_*：站点密钥绑定域名白名单，覆盖后未加白的新域名会直接不可访问
+// - ua：自定义 UA 通常配套域名防护规则，覆盖后上报全部失败，机器全部掉线
+// - resource_alert_rules：规则里存的是服务器 ID，跨站点覆盖后 ID 对不上
+// - csp_static/csp_api：CSP 白名单按域名配置，跨站点覆盖会拦掉本站静态资源与接口
+// - servers_optimized：历史分区迁移完成标记，跨库覆盖会让目标库重排 history_partition_id
+// Cloudflare 账号/令牌按需求保留在导入导出内（同账号迁移时需要一起带走）。
+export const SETTINGS_EXCLUDED_FIELDS = [
+  'username',
+  'password',
+  'jwt_secret',
+  'turnstile_enabled',
+  'turnstile_login_enabled',
+  'turnstile_site_key',
+  'turnstile_secret_key',
+  'ua',
+  'resource_alert_rules',
+  'csp_static',
+  'csp_api',
+  'servers_optimized'
+];
+
+export const IMPORTABLE_SITE_FIELDS = SITE_FIELDS.filter((field) => !SETTINGS_EXCLUDED_FIELDS.includes(field));
+export const IMPORTABLE_APPEARANCE_FIELDS = APPEARANCE_FIELDS.filter((field) => !SETTINGS_EXCLUDED_FIELDS.includes(field));
+
+export const DEFAULT_USER_AGENT = 'cfsm';
+export const USER_AGENT_MAX_LENGTH = 100;
 export const TG_NOTIFY_MINUTES_MIN = 2;
 export const TG_NOTIFY_MINUTES_MAX = 30;
 export const TG_NOTIFY_LEGACY_TRUE_MINUTES = 5;
@@ -17,8 +52,7 @@ export const LONG_HISTORY_POINT_OPTIONS = [60, 120, 180, 240];
 export const DEFAULT_LONG_HISTORY_POINTS = 120;
 export const FRONTEND_WS_TIMEOUT_MINUTES_MAX = 1440;
 export const DEFAULT_NOTIFICATION_TIMEZONE = 'UTC';
-export const NOTIFICATION_LANGUAGES = ['zh', 'en', 'es'];
-export const DEFAULT_NOTIFICATION_LANGUAGE = 'zh';
+export { DEFAULT_NOTIFICATION_LANGUAGE };
 export const DEFAULT_EXPIRE_NOTIFICATION_TIME = '12';
 export const ALL_WSS_REPORT_HOURS = Object.freeze(Array.from({ length: 24 }, (_, hour) => hour));
 export const RESOURCE_ALERT_WINDOW_MIN = 5;
@@ -73,6 +107,7 @@ const defaults = {
   preferred_theme: 'auto',
   default_language: 'auto',
   theme_options: {},
+  auto_discovery: 'false',
   is_public: 'true',
   show_price: 'true',
   show_expire: 'true',
@@ -122,7 +157,8 @@ const defaults = {
   resource_alert_rules: [],
   traffic_alert_threshold: '0',
   theme_url: '',
-  servers_optimized: 'false'
+  servers_optimized: 'false',
+  ua: DEFAULT_USER_AGENT
 };
 
 export function normalizeLongHistoryPoints(value) {
@@ -132,6 +168,28 @@ export function normalizeLongHistoryPoints(value) {
       ? points
       : DEFAULT_LONG_HISTORY_POINTS
   );
+}
+
+// 自定义 UA 会同时出现在四个载体上：上报请求头、/update 响应头、agent 的 config.conf、
+// 安装命令（shell / PowerShell / docker -e）。因此只放行一套在所有载体上都安全的字符：
+// 字母、数字、空格，以及 . _ - / , : ; ( ) + = @ # * ? ~
+// 排除项及其原因：引号和反斜杠破坏 KV 格式；单引号破坏 shell 引号；反引号/$/&/|/<>/^ 破坏
+// shell 语义；% 会被误当转义；! 在部分 shell 有历史展开；非 ASCII 会让 header 写入直接报错。
+const USER_AGENT_ALLOWED_RE = /^[A-Za-z0-9 _.\-/,:;()+=@#*?~]+$/;
+
+export function validateUserAgent(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { valid: true, value: DEFAULT_USER_AGENT };
+  if (raw.length > USER_AGENT_MAX_LENGTH) return { valid: false, value: DEFAULT_USER_AGENT };
+  if (!USER_AGENT_ALLOWED_RE.test(raw)) {
+    return { valid: false, value: DEFAULT_USER_AGENT };
+  }
+  return { valid: true, value: raw };
+}
+
+export function sanitizeUserAgent(value) {
+  const result = validateUserAgent(value);
+  return result.valid ? result.value : DEFAULT_USER_AGENT;
 }
 
 export function normalizeFrontendWsTimeoutMinutes(value) {
@@ -472,15 +530,12 @@ export function normalizePreferredTheme(value, fallback = 'auto') {
   return fallback === 'dark' || fallback === 'light' ? fallback : 'auto';
 }
 
-export function normalizeDefaultLanguage(value, fallback = 'auto') {
-  const language = String(value || '').trim().toLowerCase();
-  if (language === 'zh' || language === 'en' || language === 'es' || language === 'auto') return language;
-  return fallback === 'zh' || fallback === 'en' || fallback === 'es' ? fallback : 'auto';
+export function normalizeDefaultLanguage(value, fallback = AUTO_LANGUAGE) {
+  return normalizeLanguagePreference(value, fallback);
 }
 
 export function normalizeNotificationLanguage(value) {
-  const language = String(value || '').trim().toLowerCase();
-  return NOTIFICATION_LANGUAGES.includes(language) ? language : DEFAULT_NOTIFICATION_LANGUAGE;
+  return normalizeNotificationLanguagePreference(value);
 }
 
 export function normalizeBooleanSetting(value, fallback = 'false') {
@@ -570,9 +625,14 @@ export function isWssReportEnabled(settings = {}, now = Date.now()) {
   return getWssReportScheduleState(settings, now).active;
 }
 
+// 这些字段是在旧版「逐 key 存 settings」方案废弃之后才加入的，库里不可能存在对应的旧行，
+// 因此缺失时直接回退默认值即可。把它们排除在 hasMissingFields 之外，避免老部署每次
+// 刷新设置缓存都多做一次 SELECT * FROM settings 的兼容查询。
+const LEGACY_FALLBACK_EXEMPT_FIELDS = new Set(['ua']);
+
 function hasMissingFields(source, fields) {
   if (!source || typeof source !== 'object') return true;
-  return fields.some(field => source[field] === undefined);
+  return fields.some(field => source[field] === undefined && !LEGACY_FALLBACK_EXEMPT_FIELDS.has(field));
 }
 
 async function loadLegacySettings(db, fields) {
@@ -661,6 +721,7 @@ export async function loadSiteSettings(db, options = {}) {
     result.expire_reminder = normalizeExpireReminder(result.expire_reminder);
     result.long_history_points = normalizeLongHistoryPoints(result.long_history_points);
     result.resource_alert_rules = normalizeResourceAlertRules(result.resource_alert_rules);
+    result.auto_discovery = normalizeBooleanSetting(result.auto_discovery);
     result.show_three_net_details = normalizeBooleanSetting(result.show_three_net_details, defaults.show_three_net_details);
     result.wss_report_enabled = normalizeBooleanSetting(result.wss_report_enabled, defaults.wss_report_enabled);
     result.wss_report_hours = normalizeWssReportHours(result.wss_report_hours);
@@ -675,8 +736,15 @@ export async function loadSiteSettings(db, options = {}) {
     result.notification_language = normalizeNotificationLanguage(result.notification_language);
     result.expire_notification_time = normalizeExpireNotificationTime(result.expire_notification_time);
     result.traffic_alert_threshold = normalizeTrafficAlertThreshold(result.traffic_alert_threshold);
+    result.ua = sanitizeUserAgent(result.ua);
   } catch (e) {
     console.error('加载站点设置失败:', e);
+    if (cachedSiteSettings) {
+      // 保留上次配置，避免 D1 抖动把通知等设置重置为默认值。
+      // 沿用 120s 刷新间隔，防止缓存过期后每次请求都重试 D1；强制刷新仍可提前恢复。
+      siteSettingsCacheExpiry = now + SITE_SETTINGS_CACHE_TTL_MS;
+      return cachedSiteSettings;
+    }
   }
 
   cachedSiteSettings = result;
@@ -687,6 +755,24 @@ export async function loadSiteSettings(db, options = {}) {
 export function clearSiteSettingsCache() {
   cachedSiteSettings = null;
   siteSettingsCacheExpiry = 0;
+}
+
+// 外观设置的公共归一化。只处理实际存在的字段：老库可能还靠 legacy 单键存这几项，
+// 凭空补默认值会把原设置覆盖掉。
+export function normalizeAppearanceOptions(options = {}) {
+  if (!isValidThemeOptions(options.theme_options)) {
+    delete options.theme_options;
+  }
+  if ('display_mode' in options) {
+    options.display_mode = normalizeDisplayMode(options.display_mode, defaults.display_mode);
+  }
+  if ('preferred_theme' in options) {
+    options.preferred_theme = normalizePreferredTheme(options.preferred_theme);
+  }
+  if ('default_language' in options) {
+    options.default_language = normalizeDefaultLanguage(options.default_language);
+  }
+  return options;
 }
 
 export async function loadAppearanceOptions(db) {
@@ -718,9 +804,7 @@ export async function loadAppearanceOptions(db) {
       copyFields(result, legacy, APPEARANCE_FIELDS);
     }
     copyFields(result, appearanceOptions, APPEARANCE_FIELDS);
-    result.display_mode = normalizeDisplayMode(result.display_mode, defaults.display_mode);
-    result.preferred_theme = normalizePreferredTheme(result.preferred_theme);
-    result.default_language = normalizeDefaultLanguage(result.default_language);
+    normalizeAppearanceOptions(result);
   } catch (e) {
     console.error('加载外观设置失败:', e);
   }
@@ -761,6 +845,28 @@ export async function saveThemeOptions(db, themeOptions) {
   return themeOptions;
 }
 
+// 导入外观设置时按字段合并写入，避免只带部分字段的备份把未涉及的字段清空。
+export async function saveAppearanceOptions(db, updates = {}) {
+  const row = await db.prepare(
+    "SELECT value FROM settings WHERE key = 'appearance_options'"
+  ).first();
+  const existing = row && row.value ? tryParseJSON(row.value) || {} : {};
+
+  const merged = { ...existing, ...updates };
+  const appearanceOptions = {};
+  for (const field of APPEARANCE_FIELDS) {
+    if (field in merged) appearanceOptions[field] = merged[field];
+  }
+  normalizeAppearanceOptions(appearanceOptions);
+
+  await db.prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).bind('appearance_options', JSON.stringify(appearanceOptions)).run();
+
+  clearAppearanceSettingsCache();
+  return appearanceOptions;
+}
+
 export async function loadSettings(db) {
   const [siteSettings, appearanceOptions] = await Promise.all([
     loadSiteSettings(db),
@@ -790,6 +896,7 @@ export async function saveSiteOptions(db, updates) {
   siteOptions.expire_reminder = normalizeExpireReminder(siteOptions.expire_reminder);
   siteOptions.long_history_points = normalizeLongHistoryPoints(siteOptions.long_history_points);
   siteOptions.resource_alert_rules = normalizeResourceAlertRules(siteOptions.resource_alert_rules);
+  siteOptions.auto_discovery = normalizeBooleanSetting(siteOptions.auto_discovery);
   siteOptions.show_three_net_details = normalizeBooleanSetting(siteOptions.show_three_net_details, defaults.show_three_net_details);
   siteOptions.wss_report_enabled = normalizeBooleanSetting(siteOptions.wss_report_enabled, defaults.wss_report_enabled);
   siteOptions.wss_report_hours = normalizeWssReportHours(siteOptions.wss_report_hours);
@@ -804,6 +911,7 @@ export async function saveSiteOptions(db, updates) {
   siteOptions.notification_language = normalizeNotificationLanguage(siteOptions.notification_language);
   siteOptions.expire_notification_time = normalizeExpireNotificationTime(siteOptions.expire_notification_time);
   siteOptions.traffic_alert_threshold = normalizeTrafficAlertThreshold(siteOptions.traffic_alert_threshold);
+  siteOptions.ua = sanitizeUserAgent(siteOptions.ua);
   
   await db.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
