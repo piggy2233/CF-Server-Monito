@@ -10,7 +10,7 @@ A lightweight multi-server monitoring dashboard built on Cloudflare Workers, D1,
   <a href="README-en.md">English</a>
 </p>
 
-[![Workers](https://img.shields.io/badge/Workers-2.8.7%20Beta6-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
+[![Workers](https://img.shields.io/badge/Workers-2.8.8%20Beta2-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
 [![GitHub Stars](https://img.shields.io/github/stars/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/forks)
 [![License](https://img.shields.io/badge/License-MIT-16a34a?style=flat-square)](#license)
@@ -70,7 +70,7 @@ Compared with traditional controller-style monitoring tools, CF-Server-Monitor i
 | Cross-platform Agent | Mainstream Linux, Alpine Linux, OpenWrt, Synology DSM, Feiniu fnOS, FreeBSD, macOS, Windows, plus Docker image deployment; Go Agent by default, Shell/PowerShell still available |
 | Realtime push | Durable Objects + WebSocket refresh the UI immediately after Agent reports |
 | Alerts | Offline alerts, recovery notices, expiration reminders, resource load rules |
-| Multi-language | Built-in Chinese, English, and Latin American Spanish frontend switch; notifications in Chinese, English, or Spanish; Chinese and English documentation |
+| Multi-language | Built-in Simplified Chinese, Traditional Chinese, English, Japanese, Indonesian, French, and Spanish frontend switch; notifications in the same seven languages; Chinese and English documentation |
 | Multi-site | GitHub Pages static frontend and aggregation of multiple Worker APIs |
 | Widget | iOS Scriptable widget script for quick mobile status checks |
 | Security | API Secret, admin password, JWT, Turnstile, CORS, CSP allowlists |
@@ -96,10 +96,12 @@ Core flow:
 4. The Worker verifies `API_SECRET`, writes to D1, and broadcasts realtime data through Durable Objects.
 5. The dashboard, server detail page, admin panel, and iOS widget read from the same API.
 
+## Version Notes
 
 Recent changes:
 
-- `2.8.7`: Optimized scheduled task logic to reduce CPU usage and avoid exceeding free-tier limits. `/update` now enforces a 512KB body limit and returns 413 beyond it; Agent WSS connections for deleted servers are closed within 2 minutes; WSS reports now validate frame size and authenticated sessions survive transient D1 errors; batched samples keep only the latest 300. Added a server-side auto-discovery mechanism to automatically bind the server ID. Add custom User-Agent.Import and export include settings options.
+- `2.8.8`: Login now issues a `cfsm_ua` cookie so Cloudflare security rules can let the browser through; added an App Password for third-party apps / iOS widgets to gain additional permissions and bypass Turnstile; added Passkey login; added an instance name parameter for installing multiple independent instances on the same machine(agent >= 1.1.4).
+- `2.8.7`: Optimized scheduled task logic to reduce CPU usage and avoid exceeding free-tier limits. `/update` now enforces a 512KB body limit and returns 413 beyond it; Agent WSS connections for deleted servers are closed within 2 minutes; WSS reports now validate frame size and authenticated sessions survive transient D1 errors; batched samples keep only the latest 300. Added a server-side auto-discovery mechanism to automatically bind the server ID. Add custom User-Agent.Import and export include settings options. Resource alerts now support TCP/UDP connection counts. When no public IP is reported, fall back to the request header's source address.
 - `2.8.6`: WSS frontend subscription with 250ms batch reporting, added SMTP notification channel, added monthly traffic threshold alert, removed legacy database compatibility, added Docker installation method.
 - `2.8.5`: Added custom Ping node names, ICMP mode, optimized WSS response logic, API interface optimization, and optimized frontend. Also added 4 default Ping nodes.
 - `2.8.4`: Added Agent WSS reporting and active hours. Agents use POST outside selected hours to reduce Do duration, and this requires Agent `v1.0.10+`. Also added account Do usage display with optimized Do broadcast requests when no frontend subscription exists to reduce idle quota consumption, added custom Webhook channel in notification settings, and added frontend WSS timeout configuration.
@@ -230,6 +232,7 @@ See [cfsm-agent](https://github.com/huilang-me/cfsm-agent) for full install path
 | `-name` | Server name used when Auto Discovery creates the server | Client IP (`CF-Connecting-IP`) |
 | `-secret` | Agent reporting secret; must match `API_SECRET` | Required |
 | `-url` | Worker reporting URL | Required |
+| `-instance` | Instance name; allows multiple independent instances on one machine | Empty (default instance) |
 | `-collect_interval` | Local collection interval; `0` disables extra sampling | `0` |
 | `-interval` | Reporting interval in seconds | `60` |
 | `-ct` / `-cu` / `-cm` / `-bd` | Custom network quality test nodes, supports `host[:port]` | Built-in nodes |
@@ -238,6 +241,33 @@ See [cfsm-agent](https://github.com/huilang-me/cfsm-agent) for full install path
 | `-tx_correction` | Upload traffic correction in GB | Empty |
 
 `-collect_interval` controls local sampling. `-interval` controls reporting frequency. Shorter intervals increase Workers requests and D1 writes.
+
+### Multiple Instances
+
+Both the admin copy-install command and the Auto Discovery command provide an "Instance name" field. Set a name (letters, digits, underscores and hyphens only, up to 32 characters) to install multiple independent Probe instances on the same machine. Leave it empty to use the default instance, preserving the previous behavior.
+
+```bash
+# Install an independent instance named alpha
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- install -id=<server-id> -secret='<API_SECRET>' -url=https://<your-worker>/update -instance=alpha
+```
+
+The instance name is used as a suffix for the service name and the config/traffic-data paths (for example `cf-probe-alpha`), so each instance keeps its own process, configuration and traffic data. Windows commands and Auto Discovery commands support this parameter as well.
+
+To uninstall, target a single instance or remove every instance on the machine:
+
+```bash
+# Uninstall only the alpha instance
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- uninstall -instance=alpha
+
+# Uninstall every Probe instance on this machine
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- uninstall --all
+```
+
+On Windows PowerShell, append `-instance=alpha` or `--all` after `uninstall`, for example:
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File $script uninstall -instance=alpha
+```
 
 ### Non-root Install (Recommended)
 
@@ -256,11 +286,14 @@ When uninstalling, select the user that originally installed the Agent. For Open
 The admin copy-install dialog lets you choose Docker as the target system, generating a container command like the one below (server ID, secret, and Worker URL are filled in automatically for the current server; the image tag defaults to `latest` and can be customized in the Agent version field):
 
 ```bash
-docker run -d --name cf-probe --restart=unless-stopped --network=host \
+docker run -d --name cf-probe --restart=unless-stopped --network=host --pid=host --cap-drop=ALL --cap-add=NET_RAW \
   -v cf-probe-data:/data \
+  -v /etc/os-release:/etc/os-release:ro \
   -e SERVER_ID=<server-id> -e SECRET='<API_SECRET>' -e WORKER_URL=https://<your-worker>/update \
   ghcr.io/huilang-me/cfsm-agent:latest
 ```
+
+On Synology DSM, mount the version file as well, otherwise the panel can only show the image's OS name: add `-v /etc/defaults/VERSION:/etc/defaults/VERSION:ro` to the command.
 
 Collect interval, report interval, ping nodes, network interface, traffic reset day, and upload/download correction are pulled dynamically by the Agent from the admin panel via `SERVER_ID`, so they do not need to be repeated in the command; changing the image tag upgrades or rolls back to that version. To remove the container:
 
@@ -302,7 +335,7 @@ npm run build:github-page
 | --- | --- |
 | Site | Title, background, favicon, default display mode, default appearance, default language, three-net details, public access, auto discovery (with a copy button for the `-id`-free Linux install command) |
 | Server | HTTP/WSS report intervals, collect interval, ping nodes, network interfaces, monthly traffic, price, expiration, auto-renew |
-| Security | Admin account, password, JWT Secret, custom User-Agent, Turnstile |
+| Security | Admin account, password, JWT Secret, custom User-Agent, Turnstile, app access password |
 | Notifications | Offline alerts, expiration reminders, resource alerts, test notification |
 | Appearance | Custom CSS, custom `<head>`, CSP allowlists, Mikus mode |
 | Database | Upgrade database, clear history |
@@ -321,6 +354,20 @@ Usage:
 5. Put the server ID in the widget Parameter field, or use `id:SERVER_ID`.
 
 The widget shows online status, CPU, memory, disk, monthly traffic, realtime upload/download speed, and update time. The actual refresh interval is controlled by iOS.
+
+All three scripts support `CONFIG.userAgent`. If the Cloudflare security rule above is enabled, set it to the custom UA from the admin panel, otherwise the widget requests are challenged. Leave it empty to use Scriptable's default UA.
+
+If the site is not public, or the widget should show hidden servers, put the admin panel's Security → App Access Password into `CONFIG.appPassword`; the scripts send it as the `X-App-Password` header.
+
+To watch several servers at once, use [scripts/ios-scriptable-widget-multi.js](scripts/ios-scriptable-widget-multi.js): leave the Parameter empty to show all public servers, set `server-a,server-b` to show only those, or set a single server to get the detail view (with three-net latency bars). Servers are paged automatically (1 per page on small/medium widgets, 2 per page on large ones), and `page:2` (also `p2`, `2`, or `第2页`) selects a page for smart stacks. It requests `/api/servers` (the full list), so it costs more D1 reads than the single-server widget when you have many servers.
+
+### Third-party App
+
+A community-developed third-party mobile app is available for Android and iOS:
+
+- Project URL: <https://github.com/chaos-zhu/cf_monitor_app>
+
+> **Third-party risk notice**: This app is maintained by a third-party developer and is not an official part of this project. The maintainers of this project are not responsible for its code, security, or data behavior.
 
 ## Notifications and Alerts
 
@@ -407,7 +454,7 @@ Supported alert types:
 
 - Offline alert: notify after a node stays offline for the configured delay; send recovery notice when it returns.
 - Expiration reminder: notify daily 1 to 7 days before expiration at the configured notification timezone and expiration notification time, or disable it.
-- Resource alert: define rules for CPU, memory, disk, inbound/outbound network speed, and similar metrics.
+- Resource alert: define rules for CPU, memory, disk, inbound/outbound network speed, TCP/UDP connection counts, and similar metrics.
 
 Send a test notification before saving.
 
@@ -419,13 +466,75 @@ Send a test notification before saving.
 - After changing `API_SECRET`, redeploy the Worker and reinstall or update all Agents.
 - Keep the admin password separate from `API_SECRET` for long-term use.
 
-### Frontend WebSocket Timeout
+### JWT and WebSocket Auth
 
-Admin settings can configure the frontend WSS timeout in minutes. The default `0` disables time-based disconnects; a positive value closes the built-in frontend subscription at the limit and prompts the user to close or continue.
+- A successful admin login issues a JWT valid for 7 days; the frontend uses it for later admin requests and stores it in the `cfsm_auth` HttpOnly cookie.
+- Private sites (`is_public !== 'true'`) require login for `/api/servers`, `/api/server`, `/api/history/all`, and `/api/ws`; unauthorized WebSocket connections are never forwarded to the Durable Object.
+- `/api/ws` accepts three JWT sources: `Authorization: Bearer <token>`, `Cookie: cfsm_auth=<token>`, and the `token` / `auth_token` / `ws_token` query parameters.
+- Native browser WebSocket cannot set an `Authorization` header, so the built-in same-origin frontend uses the `cfsm_auth` cookie, while cross-origin connections append `token=<jwt>` to the URL.
+- Tokens in query parameters may appear in access logs; only use HTTPS and avoid sharing WebSocket URLs that contain a token.
+- The admin panel can configure the frontend WSS timeout in minutes: the default `0` never disconnects based on connection age; a positive value closes the built-in frontend subscription at the limit and prompts the user to close or continue.
+
+### Passkey Login
+
+Administrators can add multiple passkeys in the admin settings and sign in using the Passkey button. Password login remains available. Supported authenticators include iCloud Keychain, Windows Hello, and FIDO2 security keys such as compatible YubiKeys. Security keys must support user verification and may need a FIDO2 PIN.
+
+Use the Worker's own HTTPS admin URL to register and sign in. Passkeys are bound to the login domain; a different domain requires a new registration. Cross-origin frontends such as GitHub Pages cannot use the Worker's passkeys directly.
+
+Adding or deleting a passkey requires an authenticated admin session and the current password. Select **Add Passkey**, then choose your device or security key in the system prompt. The server stores public keys, never private keys. Keep a strong independent admin password and at least one backup credential.
+
+Login challenges are stored briefly in D1. Each source IP can create up to five login challenges per minute, and up to 100 unexpired login challenges can exist at once. Clients sharing an IP share the per-source limit. Retry later if a limit is reached. Enable login Turnstile and, where appropriate, Cloudflare security rules or rate limiting on `/admin/api` for additional protection against abuse and quota consumption.
 
 ### Turnstile
 
 Cloudflare Turnstile can be enabled from the admin panel to reduce abuse of public APIs and login endpoints. In multi-site mode, use the same Site Key across sites when Turnstile is enabled.
+
+### App Access Password
+
+Admin panel → Security → App Access Password accepts a 16-32 character password (printable ASCII, no spaces). Leave it blank to disable. Third-party apps and iOS widgets that send `X-App-Password: <password>` get read-only access equivalent to a logged-in viewer: data from private sites, `is_hidden` servers, and history beyond 24 hours.
+
+This password cannot be used for admin operations. Change it in the admin panel if it leaks. When global Turnstile is enabled, requests carrying the correct password skip it too; Turnstile on the login endpoint still applies.
+
+### Cloudflare security rule
+
+When scanners keep hitting the monitor domain, every request still counts against the Workers request quota. Cloudflare can challenge requests before they reach the Worker: only Agents carrying the custom UA and browsers holding the `cfsm_ua` cookie from a successful admin login are let through.
+
+**Requirements**
+
+- The domain is hosted on Cloudflare and bound to the Worker.
+- Agent version ≥ `1.1.4`, Workers version ≥ `2.8.7`.
+
+**Steps**
+
+1. Open the admin panel → Settings → Security → Custom UA, enter a custom string (the examples below use `myUa/name`), and save.
+2. Wait a few minutes for the new UA to reach every Agent through the `/update` response header or the WSS ack before continuing.
+3. In the Cloudflare dashboard → select the bound domain → Security → Security rules → Create rule:
+   - **Expression** (replace the host and UA with your own values):
+
+     ```
+     (http.host eq "tz.example.com" and http.user_agent ne "myUa/name" and not http.cookie contains "cfsm_ua=myUa%2Fname")
+     ```
+
+   - **Action**: Managed Challenge or JavaScript Challenge.
+
+   The expression challenges only requests that target the monitor host, do not carry the custom UA, and do not carry the admin login cookie. Agents pass via their UA; a logged-in browser passes via `cfsm_ua`.
+
+4. After saving, a private window should hit the challenge page, while the admin panel no longer does once you are logged in.
+
+**About the `cfsm_ua` cookie**
+
+- A successful login sets `cfsm_ua` alongside `cfsm_auth`. Its value is the custom UA from the admin panel, with `HttpOnly; Path=/; SameSite=Lax`, and it expires together with the login (7 days).
+- The value is URL-encoded, so `myUa/name` is stored as `myUa%2Fname`; match the **encoded** form in the rule.
+- Logout clears it, and it never exists while logged out. Sessions created before this feature was deployed need to log in once more.
+
+**Notes**
+
+- `http.host` must be the exact hostname the monitor is served on (for example `tz.example.com`). A root-domain rule will not match the monitor, and a wildcard or `contains` match will challenge other services on the same domain.
+- **Do not change the custom UA while the rule is enabled.** Agents would report a UA that no longer matches. The correct order is: pause the rule → change the UA → wait a few minutes for it to reach the Agents → update both the UA and the encoded cookie value in the rule → re-enable the rule.
+- The iOS Scriptable widget, custom scripts, and third-party API clients do not carry the admin cookie and will be challenged. They must send `User-Agent: <custom UA>` to pass.
+- Once the challenge is in place, you can turn off the global Turnstile verification in the admin panel to avoid verifying the same request twice.
+- This rule reduces scanner noise only: `cfsm_ua` is a fixed, forgeable string and must not be treated as access control.
+- Opening the admin panel while logged out means passing the challenge first. The login request relies on the `cf_clearance` cookie from that challenge; if it has expired and login seems to do nothing, reload the page to pass the challenge again.
 
 ### CORS
 
@@ -442,7 +551,7 @@ Built-in sources include Cloudflare Turnstile, Cloudflare Analytics, Google Font
 The project includes a built-in theme and supports:
 
 - Dark / light display
-- Chinese / English frontend switch
+- Multi-language frontend switch (7 languages)
 - Custom background, favicon, CSS, and `<head>`
 - Mikus mode
 - Theme store
@@ -467,7 +576,7 @@ For one-click deployment, redeploy to the same project or migrate to a fork-base
 
 ### Upgrade Agent
 
-The Go Agent keeps existing configuration. Re-running the install command upgrades it.
+The Go Agent keeps existing configuration. Re-running the install command upgrades it. With multiple instances, re-run the install command with the same `-instance` for each instance.
 
 Linux / OpenWrt / Synology DSM / FreeBSD / macOS:
 
@@ -490,6 +599,8 @@ Go Agent:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- uninstall
 ```
+
+See "Multiple Instances" above for uninstalling a single instance or all instances (`-instance=NAME` / `--all`). The admin delete-server dialog can also generate and copy the matching command.
 
 The legacy Shell / PowerShell Agent is no longer maintained. The commands below are only for cleaning up historical Shell / PowerShell installations. Use the script that matches the system script used during the original install. If the current Agent is the Go Agent, use the Go uninstall command above.
 
@@ -532,7 +643,7 @@ After upgrading from older versions to versions with GPU, disk IO, packet loss, 
 
 ### Requirements
 
-- Node.js 18+
+- Node.js 20+
 - npm
 - Wrangler 4
 
@@ -611,6 +722,7 @@ CF-Server-Monitor/
 │   ├── handlers/            # Worker route handlers
 │   ├── middleware/          # Auth middleware
 │   ├── services/            # Notification service
+│   ├── shared/              # Shared constants for frontend and Worker (language list, etc.)
 │   └── utils/               # Cache, CORS, CSP, metrics, version helpers
 ├── test/                    # Local tests and mock data tools
 ├── API.md                   # REST / WebSocket API reference
@@ -704,7 +816,7 @@ The frontend may display Hong Kong, Macao, Taiwan, and country/region informatio
 ## Related Docs
 
 - [API.md](API.md): REST API, WebSocket, auth, error codes, and data structures
-- [https://github.com/huilang-me/cfsm-agent](cfsm-agent): Go Agent configuration, upgrade, logs, and troubleshooting
+- [cfsm-agent](https://github.com/huilang-me/cfsm-agent): Go Agent configuration, upgrade, logs, and troubleshooting
 - [theme-develop.md](theme-develop.md): Third-party theme development
 - [theme-ai-prompt.md](theme-ai-prompt.md): Theme development AI prompt — paste it into an AI assistant to build themes that follow project rules
 - [test/README.md](test/README.md): Local mock data and testing workflow
@@ -724,11 +836,6 @@ If this project is helpful to you, you can support future maintenance through th
 
 - WeChat appreciation: scan the QR code
 
-### Partners & Recommendations
-
-If you need airport transfers, business transportation, or private chauffeur services in the Greater Bay Area, you can consider [Hong Kong Chauffeur](https://hkchauffeur.com/), serving Hong Kong, Shenzhen, Guangzhou, Zhuhai, Macau, and other major cities in the region.
-
-
 ## Credits
 
 - [CF-Server-Monitor-Pro](https://github.com/a63414262/CF-Server-Monitor-Pro)
@@ -738,6 +845,7 @@ If you need airport transfers, business transportation, or private chauffeur ser
 - [Chart.js](https://www.chartjs.org/)
 - [Leaflet](https://leafletjs.com/)
 - Thanks to the [NodeSeek](https://www.nodeseek.com/post-763025-1) and [LINUX DO](https://linux.do/) communities for support and promotion
+- [Hong Kong Chauffeur](https://hkchauffeur.com/)
 
 ## License
 

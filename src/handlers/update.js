@@ -5,7 +5,8 @@ import {
   DISK_IO_FIELD_TO_COLUMN,
   DISK_IO_METRIC_FIELDS,
   mergeMetricsIntoServer,
-  coerceNumericMetricFields
+  coerceNumericMetricFields,
+  applyRequestIpFallback
 } from '../utils/metrics.js';
 import { createErrorResponse, createUnauthorizedResponse, createBadRequestResponse } from '../utils/errors.js';
 import { ensureServerOptimization } from '../database/indexOptimization.js';
@@ -15,7 +16,7 @@ import {
   hasRecentFrontendRealtimeActivity,
   markFrontendRealtimeActive
 } from '../utils/realtimeBroadcastGate.js';
-import { checkWebSocketAuth } from '../middleware/auth.js';
+import { checkWebSocketAuth, hasAppPasswordAccess } from '../middleware/auth.js';
 import {
   AGENT_CONFIG_MD5_HEADER,
   AGENT_CONFIG_SCHEMA_HEADER,
@@ -744,7 +745,9 @@ async function handleUpdateCore(request, env, ctx, discovery, authState = null) 
     // 获取最后一条插入（如果是批量数据，取最后一个样本）
     const latestSample = samples[samples.length - 1];
     const latestMetrics = getReportMetrics(data, latestSample);
-    const historyMetrics = getHistoryMetrics(data, samples, latestSample);
+    // 探针没探到公网 IP（ip_v4/ip_v6 均为空或 "0"）时，用本次连接的来源 IP 补位，
+    // 按地址族写入对应字段；只作用于落库的指标，广播 payload 本就不含 ip 字段。
+    const historyMetrics = applyRequestIpFallback(getHistoryMetrics(data, samples, latestSample), request);
     await saveMetricsHistory(
       env.DB,
       id,
@@ -862,7 +865,11 @@ async function forwardWebSocketUpgrade(request, env, internalPath, logPrefix) {
 
 export async function handleWebSocketUpgrade(request, env) {
   const settings = await loadSiteSettings(env.DB, { forceRefresh: true });
-  if (settings?.is_public !== 'true' && !await checkWebSocketAuth(request, env, settings)) {
+  // 私有站点的实时订阅：登录态或第三方 App 口令任一通过即可。
+  const authorized = settings?.is_public === 'true'
+    || await checkWebSocketAuth(request, env, settings)
+    || hasAppPasswordAccess(request, settings);
+  if (!authorized) {
     return new Response(JSON.stringify({ error: 'Unauthorized', code: 401 }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }

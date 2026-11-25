@@ -10,7 +10,7 @@
   <a href="README-en.md">English</a>
 </p>
 
-[![Workers](https://img.shields.io/badge/Workers-2.8.7%20Beta6-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
+[![Workers](https://img.shields.io/badge/Workers-2.8.8%20Beta2-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
 [![GitHub Stars](https://img.shields.io/github/stars/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/forks)
 [![License](https://img.shields.io/badge/License-MIT-16a34a?style=flat-square)](#许可证)
@@ -70,7 +70,7 @@ CF-Server-Monitor 是一个部署在 Cloudflare Workers 上的服务器监控系
 | 多系统 Agent | 主流 Linux、Alpine Linux、OpenWrt、群晖 DSM、飞牛 fnOS、FreeBSD、macOS、Windows，支持 Docker 镜像部署；默认 Go 版本，保留 Shell/PowerShell 版本 |
 | 实时推送      | Durable Objects + WebSocket，Agent 上报后前端即时刷新                                      |
 | 告警通知      | 离线告警、恢复通知、到期提醒、资源负载告警                                                            |
-| 多语言       | 前端内置中文、英文和西班牙语（拉美）切换；通知消息支持中文、英文和西班牙语；文档提供中文与英文入口              |
+| 多语言       | 前端内置简体中文、繁體中文、English、日本語、Bahasa Indonesia、Français、Español 切换；通知消息支持同样 7 种语言；文档提供中文与英文入口              |
 | 多站点       | 支持 GitHub Pages 静态前台和多个 Worker API 聚合展示                                          |
 | 小组件       | 提供 iOS Scriptable 小组件脚本，适合移动端快速查看                                                |
 | 安全控制      | API Secret、管理员密码、JWT、Turnstile、CORS、CSP 白名单                                      |
@@ -95,9 +95,12 @@ flowchart LR
 3. Worker 校验 `API_SECRET`，写入 D1，并通过 Durable Object 广播实时数据。
 4. 前台大盘、详情页、管理后台和 iOS 小组件读取同一套 API。
 
+## 版本说明
+
 近期变化：
 
-- `2.8.7`：优化定时任务逻辑，降低CPU负载，避免超出免费额度限制；`/update` 增加 512KB 请求体上限，超限直接返回 413；服务器被删除后，其 Agent 的 WSS 连接会在 2 分钟内自动断开；WSS 上报增加帧大小校验，D1 抖动时不再中断已认证会话；批量样本只保留最新 300 条。新增服务端自动发现机制自动绑定服务器ID。新增自定义UA；导入导出包含设置选项；
+- `2.8.8`：登录下发 `cfsm_ua` Cookie 供 Cloudflare 安全规则放行；新增 APP Password，用于第三方 App / iOS 小组件获得更多权限并绕过 Turnstile；新增 Passkey 登录；新增实例名参数，支持在同一台机器安装多个独立实例（agent >= 1.1.4）。
+- `2.8.7`：优化定时任务逻辑，降低CPU负载，避免超出免费额度限制；`/update` 增加 512KB 请求体上限，超限直接返回 413；服务器被删除后，其 Agent 的 WSS 连接会在 2 分钟内自动断开；WSS 上报增加帧大小校验，D1 抖动时不再中断已认证会话；批量样本只保留最新 300 条。新增服务端自动发现机制自动绑定服务器ID。新增自定义UA；导入导出包含设置选项；资源负载告警新增 TCP/UDP 连接数监控。上报未探到公网 IP 时用请求头来源地址补位。
 - `2.8.6`：WSS前端订阅采用250毫秒批量上报，新增SMTP通知渠道，新增月度流量阈值告警，移除旧版数据库兼容性，新增Docker安装方式。
 - `2.8.5`：支持自定义 Ping 节点名称；增加ICMP模式；优化WSS响应逻辑；API接口优化；原皮前端优化；新增4个ping节点。
 - `2.8.4`：新增 Agent WSS 上报和 WSS 开启时段，提升实时数据推送及时性，并允许非目标时段自动改用 POST 降低 Do 时长消耗；该能力要求 Agent 升级到 `v1.0.10+`。新增账户Do用量展示，优化无前端订阅时的 Do 实时广播请求，降低空闲额度消耗。通知设置新增自定义 Webhook 渠道, 新增前端wss超时配置。
@@ -123,14 +126,14 @@ Go Agent 的完整更新记录见 [cfsm-agent releases](https://github.com/huila
 
 这是推荐方式，适合希望通过 Cloudflare 控制台自动构建和重新部署的用户。
 
-1. Fork 本仓库到自己的 GitHub 账号。
-2. 进入 Cloudflare Dashboard，打开 Workers & Pages。
-3. 创建 Worker，并选择从 GitHub 仓库导入本项目。
+图文教程：<https://huilang.me/cf-server-monitor-setup/>
+
+1. 打开项目地址[CF-Server-Monitor](https://github.com/huilang-me/CF-Server-Monitor/), 老规矩，右上角来个Star，然后点[Fork](https://github.com/huilang-me/CF-Server-Monitor/fork)
+2. 进入 Cloudflare Dashboard，打开 [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages)。
+3. [创建 Worker](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)，并选择从 GitHub 仓库导入本项目。
 4. 构建命令填写 `npm run build:frontend`。
 5. 部署命令使用 `npx wrangler deploy`。
 6. 部署完成后，在 Worker 的 Variables and Secrets 中添加 `API_SECRET`。
-
-图文教程：<https://huilang.me/cf-server-monitor-setup/>
 
 ### 方式二：GitHub Actions 自动部署
 
@@ -228,6 +231,7 @@ V2.8.3 起默认使用独立项目 [cfsm-agent](https://github.com/huilang-me/cf
 | `-name`                       | 自动建号时的服务器名称                   | 连接来源 IP（`CF-Connecting-IP`） |
 | `-secret`                     | Agent 上报密钥，需要等于 `API_SECRET` | 必填   |
 | `-url`                        | Worker 上报地址                  | 必填   |
+| `-instance`                   | 实例名；填写后可在同一台机器安装多个独立实例      | 空（默认实例） |
 | `-collect_interval`           | 本机采集间隔；`0` 表示不额外采样           | `0`  |
 | `-interval`                   | 上报间隔，单位秒                     | `60` |
 | `-ct` / `-cu` / `-cm` / `-bd` | 自定义网络质量测试节点，支持 `host[:port]` | 内置节点 |
@@ -236,6 +240,33 @@ V2.8.3 起默认使用独立项目 [cfsm-agent](https://github.com/huilang-me/cf
 | `-tx_correction`              | 上行月流量校正，单位 GB                | 空    |
 
 `-collect_interval` 控制本机额外采集频率，`-interval` 控制上报频率。上报越频繁，Workers 请求和 D1 写入越多。
+
+### 多实例安装与管理
+
+管理后台的复制安装命令和自动发现命令均提供“实例名”输入框。填写名称（仅支持字母、数字、下划线和短横线，最多 32 个字符）即可在同一台机器上安装多个互不干扰的 Probe 实例；留空则使用默认实例，与旧版本行为一致。
+
+```bash
+# 安装名为 alpha 的独立实例
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- install -id=<服务器ID> -secret='<API_SECRET>' -url=https://<你的后台地址>/update -instance=alpha
+```
+
+实例名会作为后缀用于服务名以及配置、流量数据路径（例如 `cf-probe-alpha`），各实例的进程、配置和流量数据彼此独立。Windows 命令与自动发现命令同样支持该参数。
+
+卸载时可按实例卸载，或一次卸载本机全部实例：
+
+```bash
+# 只卸载 alpha 实例
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- uninstall -instance=alpha
+
+# 卸载本机全部 Probe 实例
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- uninstall --all
+```
+
+Windows PowerShell 中把 `uninstall` 后加上 `-instance=alpha` 或 `--all` 即可，例如：
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File $script uninstall -instance=alpha
+```
 
 ### 非 root 安装（推荐）
 
@@ -254,11 +285,14 @@ loginctl enable-linger 用户名
 后台复制安装命令的目标系统支持选择 Docker，会生成如下容器命令（服务器 ID、Secret、Worker 地址已按当前服务器自动填充，镜像标签默认 `latest`，可在 Agent 版本栏自定义）：
 
 ```bash
-docker run -d --name cf-probe --restart=unless-stopped --network=host \
+docker run -d --name cf-probe --restart=unless-stopped --network=host --pid=host --cap-drop=ALL --cap-add=NET_RAW \
   -v cf-probe-data:/data \
+  -v /etc/os-release:/etc/os-release:ro \
   -e SERVER_ID=<服务器ID> -e SECRET='<API_SECRET>' -e WORKER_URL=https://<你的后台地址>/update \
   ghcr.io/huilang-me/cfsm-agent:latest
 ```
+
+群晖 DSM 需要额外挂载版本文件，否则面板只能显示镜像内的系统名：在命令中追加 `-v /etc/defaults/VERSION:/etc/defaults/VERSION:ro`。
 
 采集间隔、上报间隔、Ping 节点、网卡、流量重置日、上下行校正等运行参数由 Agent 按 `SERVER_ID` 从后台动态拉取，无需在命令中重复指定；更换镜像标签即回退/升级到指定版本。卸载容器：
 
@@ -300,7 +334,7 @@ npm run build:github-page
 | ------------- | ------------------------------------- |
 | 站点设置          | 标题、背景、favicon、默认展示模式、默认外观、默认语言、三网详情、公开访问策略、自动发现（可复制免 ID 的 Linux 安装命令） |
 | 服务器参数         | HTTP/WSS 上报间隔、采集间隔、Ping 节点、网卡、月流量、价格、到期时间、自动续费 |
-| 安全设置          | 管理员账号密码、JWT Secret、自定义 UA、Turnstile     |
+| 安全设置          | 管理员账号密码、JWT Secret、自定义 UA、Turnstile、App 访问口令     |
 | 通知设置          | 离线告警、到期提醒、资源负载告警、测试通知                 |
 | 外观设置          | 自定义 CSS、`<head>`、CSP 白名单、Mikus 模式     |
 | 数据库管理         | 升级数据库、清空历史数据                          |
@@ -319,6 +353,20 @@ npm run build:github-page
 5. 在小组件 Parameter 中填写服务器 ID，也可以写成 `id:SERVER_ID`。
 
 小组件会显示在线状态、CPU、内存、磁盘、月流量、实时上下行速率和更新时间。iOS 会按系统策略决定实际刷新频率。
+
+三个脚本都支持 `CONFIG.userAgent`：如果启用了上文「Cloudflare 安全规则」，需要把它填成后台的自定义 UA，否则小组件的请求会被质询拦截。留空则使用 Scriptable 的默认 UA。
+
+如果站点未开启公开访问、或需要显示隐藏服务器，把后台「安全设置 → App 访问口令」填到 `CONFIG.appPassword`，脚本会通过 `X-App-Password` 请求头带上。
+
+需要一次看多台时用 [scripts/ios-scriptable-widget-multi.js](scripts/ios-scriptable-widget-multi.js)：Parameter 留空显示面板上所有公开服务器，填 `server-a,server-b` 只显示这几台，只填一台时显示详细视图（带三网延迟柱状图）。服务器会自动分页（小、中尺寸每页 1 台，大尺寸每页 2 台），Parameter 填 `page:2`（也支持 `p2`、`2`、`第2页`）可指定页码，适合智能叠放。它请求的是 `/api/servers`（全站列表），服务器较多时会比单机版产生更多 D1 查询。
+
+### 第三方 App
+
+社区开发者提供了第三方移动端 App，支持 Android 和 iOS：
+
+- 项目地址：<https://github.com/chaos-zhu/cf_monitor_app>
+
+> **第三方风险提醒**：该 App 由第三方开发者维护，并非本项目官方出品，本项目维护者不对其代码、安全性和数据行为负责。
 
 ## 通知与告警
 
@@ -405,7 +453,7 @@ smtp://<用户名>:<密码>@<host>:<port>?from=<发件人>&to=<收件人1,收件
 
 - 离线告警：节点离线达到设定阈值后通知，恢复后发送恢复通知。
 - 到期提醒：服务器到期前 1 到 7 天内，按通知时区和到期通知时间每天提醒，也可关闭。
-- 资源负载告警：按 CPU、内存、磁盘、上下行速率等指标配置规则。
+- 资源负载告警：按 CPU、内存、磁盘、上下行速率、TCP/UDP 连接数等指标配置规则。
 
 配置后请先点击发送测试通知，再保存配置。
 
@@ -426,9 +474,66 @@ smtp://<用户名>:<密码>@<host>:<port>?from=<发件人>&to=<收件人1,收件
 - 查询参数 token 可能出现在访问日志中，请只通过 HTTPS 使用，并避免把带 token 的 WebSocket URL 分享给他人。
 - 后台可配置“前端 WSS 超时（分钟）”：默认 `0`，表示不因连接时长主动断开；设为正整数后，内置前端到时会断开实时订阅并弹窗让用户选择关闭或继续。
 
+### Passkey 登录
+
+管理员可在后台添加多个 Passkey，并在登录页选择 Passkey 登录；原有密码登录仍可使用。支持 iCloud 钥匙串、Windows Hello，以及支持 FIDO2 用户验证的 YubiKey 等安全密钥。安全密钥可能需要先设置 PIN；仅支持旧版 U2F 或不支持用户验证的设备不适用。
+
+请通过 Worker 自身的 HTTPS 后台地址绑定和使用 Passkey。Passkey 与登录页面域名绑定：更换域名后需在新域名重新绑定，GitHub Pages 或其他跨域前台不能直接复用 Worker 域名下的 Passkey。建议至少绑定两个独立凭证作为备用，并为后台设置独立强密码；保留密码登录时，密码安全仍影响整个账户。
+
+添加或删除凭证需要管理员登录并再次输入当前密码。点击“添加 Passkey”后，在系统弹窗中选择 iCloud 钥匙串、Windows Hello 或安全密钥；使用 YubiKey 等设备时，按提示连接或轻触密钥并输入 FIDO2 PIN。服务端只保存公钥和凭证信息，不保存 Passkey 私钥。
+
+登录入口会生成短期有效的挑战并写入 D1。每个来源 IP 每分钟最多创建 5 个登录挑战，且最多保留 100 个未过期登录挑战；触发限制时请稍后重试。共享出口 IP 的用户会共用来源限制。如需进一步限制恶意请求和额度消耗，可启用后台登录 Turnstile，并结合 Cloudflare 的安全规则或速率限制保护 `/admin/api`。
+
 ### Turnstile
 
 可在后台启用 Cloudflare Turnstile，用于降低公开 API 和登录入口被刷的风险。多站点模式下，如果多个站点都启用 Turnstile，请保持 Site Key 一致。
+
+### 第三方 App 访问口令
+
+后台 → 安全设置 → App 访问口令 可设置一段 16-32 位口令（可见 ASCII，不含空格），留空表示不启用。第三方 App、iOS 小组件在请求头携带 `X-App-Password: <口令>` 后，可以像登录用户一样只读访问：私有站点（未开启公开访问）的数据、`is_hidden` 的隐藏服务器，以及超过 24 小时的历史数据。
+
+该口令不能用于后台管理操作；泄露后请及时在后台修改。开启「Turnstile 人机验证码（全局）」时，携带正确口令的请求同样会跳过验证，登录入口的 Turnstile 仍然保留。
+
+### Cloudflare 安全规则
+
+探针域名被扫描器反复请求时，每次请求都会计入 Workers 请求额度。可以让 Cloudflare 在请求到达 Worker 之前先做一次质询：只放行携带自定义 UA 的 Agent，以及登录后台后携带 `cfsm_ua` Cookie 的浏览器，其余请求全部质询。
+
+**前提**
+
+- 域名已托管在 Cloudflare 并绑定到 Worker。
+- Agent 版本 ≥ `1.1.1`，Workers 版本 ≥ `2.8.7`。
+
+**步骤**
+
+1. 进入后台 → 设置 → 安全设置 → 自定义 UA，填入一段自定义字符串（下文示例统一用 `myUa/name`），保存。
+2. 等待几分钟，让新 UA 通过 `/update` 响应头或 WSS ack 下发到所有 Agent，再继续下一步。
+3. 进入 Cloudflare 仪表盘 → 选择已绑定的域名 → 安全性 → 安全规则 → 创建规则：
+   - **表达式**（域名和 UA 换成你自己的值）：
+
+     ```
+     (http.host eq "tz.example.com" and http.user_agent ne "myUa/name" and not http.cookie contains "cfsm_ua=myUa%2Fname")
+     ```
+
+   - **操作**：托管质询（Managed Challenge）或 JavaScript 质询。
+
+   表达式含义：只对「探针域名 + UA 不是自定义 UA + 没有后台登录 Cookie」的请求发起质询。Agent 靠 UA 放行，已登录的浏览器靠 `cfsm_ua` Cookie 放行。
+
+4. 保存后，用无痕窗口访问探针域名应看到质询页；登录后台后不再质询。
+
+**关于 `cfsm_ua` Cookie**
+
+- 登录成功时服务端会同时下发 `cfsm_ua`，值为后台设置的自定义 UA，属性为 `HttpOnly; Path=/; SameSite=Lax`，有效期与登录态一致（7 天）。
+- 值会做 URL 编码后写入，`myUa/name` 实际是 `myUa%2Fname`，规则里要匹配**编码后**的形式。
+- 退出登录时一并清除，未登录不会存在；上线本功能前已登录的会话需要重新登录一次才会带上。
+
+**注意事项**
+
+- `http.host` 必须与探针实际访问的完整主机名一致（如 `tz.example.com`）。写成根域名规则不会命中探针，写成通配或包含则会把同域下的其他服务一起质询。
+- **规则启用后不要再直接修改后台的自定义 UA**。改了 UA 而规则没跟着改，Agent 的上报会被全部质询。正确顺序是：暂停规则 → 修改 UA → 等待几分钟下发到 Agent → 同步修改规则里的 UA 和编码后的 Cookie 值 → 重新启用规则。
+- iOS Scriptable 小组件、自建脚本和第三方 API 调用不携带后台登录 Cookie，会被这条规则拦截。需要这些调用在请求头里带上 `User-Agent: <自定义 UA>` 才能放行。
+- 启用质询后，可以关掉后台的「启用 Turnstile 人机验证码（全局）」，避免同一个请求被验证两次。
+- 这条规则用于降低扫描噪音：`cfsm_ua` 是固定字符串，可被伪造，不能当作访问控制手段。
+- 未登录时打开后台，页面会先过一次质询；登录请求依赖这次质询留下的 `cf_clearance`，如果质询已过期导致登录没反应，刷新页面重新通过一次即可。
 
 ### CORS
 
@@ -445,7 +550,7 @@ smtp://<用户名>:<密码>@<host>:<port>?from=<发件人>&to=<收件人1,收件
 项目内置默认主题，并支持：
 
 - 深色 / 浅色显示
-- 前台中文 / 英文切换
+- 前台多语言切换（7 种语言）
 - 自定义背景图、favicon、CSS、`<head>`
 - Mikus 模式
 - 主题商店
@@ -470,7 +575,7 @@ smtp://<用户名>:<密码>@<host>:<port>?from=<发件人>&to=<收件人1,收件
 
 ### 升级 Agent
 
-Go 版本 Agent 会保留原配置，直接执行安装命令即可升级。
+Go 版本 Agent 会保留原配置，直接执行安装命令即可升级。多实例场景请对每个实例分别重新执行带相同 `-instance` 的安装命令。
 
 Linux / OpenWrt / Synology DSM / FreeBSD / macOS：
 
@@ -493,6 +598,8 @@ Go 版本：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- uninstall
 ```
+
+按实例卸载或一次卸载全部实例的命令见上文「多实例安装与管理」（`-instance=NAME` / `--all`），管理后台的删除服务器弹窗也可直接生成并复制对应命令。
 
 旧 Shell / PowerShell 版本已不再维护，下面命令仅用于清理历史 Shell / PowerShell 安装。请按当初安装时使用的系统脚本选择对应卸载命令；如果当前运行的是 Go Agent，请使用上面的 Go 卸载命令。
 
@@ -535,7 +642,7 @@ Go 版本和旧 Shell / PowerShell 版本卸载脚本只清理各自安装的服
 
 ### 环境要求
 
-- Node.js 18+
+- Node.js 20+
 - npm
 - Wrangler 4
 
@@ -615,6 +722,7 @@ CF-Server-Monitor/
 │   ├── handlers/            # Worker 路由处理
 │   ├── middleware/          # 鉴权中间件
 │   ├── services/            # 通知服务
+│   ├── shared/              # 前后端共用常量（语言清单等）
 │   └── utils/               # 缓存、CORS、CSP、指标处理、版本检查
 ├── test/                    # 本地测试和模拟数据工具
 ├── API.md                   # REST / WebSocket API 文档
@@ -707,7 +815,7 @@ echo <CF_CDN_IP> <你的探针域名> | sudo tee -a /etc/hosts
 ## 相关文档
 
 - [API.md](API.md)：REST API、WebSocket、鉴权、错误码和数据结构
-- [https://github.com/huilang-me/cfsm-agent](cfsm-agent)：Go 版本 Agent 配置、升级、日志与排障
+- [cfsm-agent](https://github.com/huilang-me/cfsm-agent)：Go 版本 Agent 配置、升级、日志与排障
 - [theme-develop.md](theme-develop.md)：第三方主题开发
 - [theme-ai-prompt.md](theme-ai-prompt.md)：主题开发 AI 提示词，直接粘贴给 AI 即可按项目规范开发主题
 - [test/README.md](test/README.md)：本地模拟数据和测试流程
@@ -727,10 +835,6 @@ echo <CF_CDN_IP> <你的探针域名> | sudo tee -a /etc/hosts
 
 - 微信赞赏：扫码支持
 
-### 合作与推荐
-
-如果你需要粤港澳大湾区的机场接送、商务用车或私人包车服务，可参考 [Hong Kong Chauffeur](https://hkchauffeur.com/)，覆盖香港、深圳、广州、珠海、澳门等地区。
-
 ## 致谢
 
 - [CF-Server-Monitor-Pro](https://github.com/a63414262/CF-Server-Monitor-Pro)
@@ -740,6 +844,7 @@ echo <CF_CDN_IP> <你的探针域名> | sudo tee -a /etc/hosts
 - [Chart.js](https://www.chartjs.org/)
 - [Leaflet](https://leafletjs.com/)
 - 感谢 [NodeSeek](https://www.nodeseek.com/post-763025-1) 和 [LINUX DO](https://linux.do/) 社区的支持与推广
+- [Hong Kong Chauffeur](https://hkchauffeur.com/)
 
 ## 许可证
 
